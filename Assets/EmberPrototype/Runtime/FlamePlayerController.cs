@@ -54,6 +54,11 @@ namespace EmberPrototype
         [Tooltip("Maximum sideways correction used to flow around a small corner. Set to 0 to disable assist.")]
         [SerializeField, Min(0f)] private float fireTravelCornerAssistDistance = 1f;
         [SerializeField, Min(0.05f)] private float fireTravelCornerAssistStep = 0.25f;
+        [Tooltip("Speed retained after fire travel hits a solid obstacle.")]
+        [SerializeField, Min(0f)] private float fireTravelBounceSpeed = 15f;
+        [SerializeField, Min(1f)] private float fireTravelGroundBounceMultiplier = 1.2f;
+        [SerializeField, Range(0f, 1f)] private float fireTravelWallUpwardBias = 0.25f;
+        [SerializeField, Min(0f)] private float fireTravelBounceAfterimageDuration = 0.16f;
         [SerializeField, Min(0.1f)] private float fireNetworkStepRange = 1.65f;
         [SerializeField, Range(-1f, 1f)] private float fireNetworkDirectionDot = 0.45f;
         [SerializeField, Min(0f)] private float launchSpeed = 15f;
@@ -256,9 +261,10 @@ namespace EmberPrototype
         {
             HandleFlammableContact(collision.collider);
 
-            if (state == FlameState.Travelling && CollisionBlocksFireTravel(collision))
+            if (state == FlameState.Travelling
+                && TryGetFireTravelBlockingNormal(collision, out Vector2 blockingNormal))
             {
-                CancelFireTravel();
+                BounceFromFireTravel(blockingNormal);
                 return;
             }
 
@@ -405,7 +411,6 @@ namespace EmberPrototype
                 if (distance <= 0.05f) continue;
                 float directionMatch = Vector2.Dot(offset / distance, direction);
                 if (directionMatch < fireTargetDirectionDot) continue;
-                if (!CanBuildFireTravelPath(body.position, null, tile)) continue;
                 float score = directionMatch * 2f - distance / fireTravelRange;
                 if (score > bestScore)
                 {
@@ -507,7 +512,6 @@ namespace EmberPrototype
                 if (distance <= 0.001f || distance > fireNetworkStepRange) continue;
                 float match = Vector2.Dot(offset / distance, direction);
                 if (match < fireNetworkDirectionDot) continue;
-                if (!CanBuildFireTravelPath(targetFire.AnchorPosition, targetFire, tile)) continue;
                 float score = match * 2f - distance / fireNetworkStepRange;
                 if (score > bestScore)
                 {
@@ -521,9 +525,17 @@ namespace EmberPrototype
         private void BeginFireTravel(FlammableTile destination)
         {
             FlammableTile source = state == FlameState.Anchored ? targetFire : null;
-            if (!TryBuildFireTravelPath(body.position, source, destination, out Vector2 waypoint, out bool useWaypoint))
+            bool hasSafeRoute = TryBuildFireTravelPath(
+                body.position,
+                source,
+                destination,
+                out Vector2 waypoint,
+                out bool useWaypoint);
+            if (!hasSafeRoute)
             {
-                return;
+                // A blocked target is still valid: the player travels into the obstacle and ricochets.
+                waypoint = default;
+                useWaypoint = false;
             }
 
             jumpRemaining = coyoteRemaining = burstChargeRemaining = 0f;
@@ -540,31 +552,69 @@ namespace EmberPrototype
             afterimageEffect.BeginTrail();
         }
 
-        private bool CollisionBlocksFireTravel(Collision2D collision)
+        private bool TryGetFireTravelBlockingNormal(Collision2D collision, out Vector2 blockingNormal)
         {
-            if (targetFire == null) return true;
+            blockingNormal = Vector2.zero;
+            if (targetFire == null) return false;
 
             Vector2 travelDirection = CurrentFireTravelDestination() - body.position;
             if (travelDirection.sqrMagnitude <= 0.0001f) return false;
             travelDirection.Normalize();
 
+            float mostBlockingDot = -0.2f;
+            bool found = false;
+
             for (int i = 0; i < collision.contactCount; i++)
             {
                 ContactPoint2D contact = collision.GetContact(i);
-                if (Vector2.Dot(travelDirection, contact.normal) < -0.2f) return true;
+                float dot = Vector2.Dot(travelDirection, contact.normal);
+                if (dot >= mostBlockingDot) continue;
+                mostBlockingDot = dot;
+                blockingNormal = contact.normal;
+                found = true;
             }
 
-            return false;
+            return found;
+        }
+
+        private void BounceFromFireTravel(Vector2 surfaceNormal)
+        {
+            Vector2 incomingDirection = CurrentFireTravelDestination() - body.position;
+            if (incomingDirection.sqrMagnitude <= 0.0001f) incomingDirection = -surfaceNormal;
+            incomingDirection.Normalize();
+
+            Vector2 bounceDirection = Vector2.Reflect(incomingDirection, surfaceNormal).normalized;
+            if (Mathf.Abs(surfaceNormal.x) > 0.5f)
+            {
+                bounceDirection.y = Mathf.Max(bounceDirection.y, fireTravelWallUpwardBias);
+                bounceDirection.Normalize();
+            }
+
+            float speed = fireTravelBounceSpeed;
+            if (surfaceNormal.y > 0.5f) speed *= fireTravelGroundBounceMultiplier;
+
+            afterimageEffect.StopTrail();
+            state = FlameState.Free;
+            targetFire = null;
+            travelSourceFire = null;
+            hasFireTravelWaypoint = false;
+            body.gravityScale = initialGravity;
+            body.collisionDetectionMode = initialCollisionDetectionMode;
+            bodyCollider.enabled = true;
+            transform.localScale = initialScale;
+            body.linearVelocity = bounceDirection * speed;
+            upwardVelocityBeforeCollision = Mathf.Max(0f, body.linearVelocity.y);
+            normalJump = false;
+            cornerCorrectionUsed = false;
+            launchProtection = 0.16f;
+            wasGrounded = false;
+            flameFeedback.PlayLaunch(bounceDirection);
+            afterimageEffect.PlayTimedTrail(fireTravelBounceAfterimageDuration);
         }
 
         private Vector2 CurrentFireTravelDestination()
         {
             return hasFireTravelWaypoint ? fireTravelWaypoint : targetFire.AnchorPosition;
-        }
-
-        private bool CanBuildFireTravelPath(Vector2 start, FlammableTile source, FlammableTile destination)
-        {
-            return TryBuildFireTravelPath(start, source, destination, out _, out _);
         }
 
         private bool TryBuildFireTravelPath(
