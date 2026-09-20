@@ -443,7 +443,7 @@ namespace EmberPrototype
 
         private void TryIgnitionBurst()
         {
-            if (!burstAvailable || IsGrounded()) return;
+            if (!burstAvailable) return;
             burstAvailable = false;
             TriggerIgnitionBurst();
             flameFeedback.PlayBurst();
