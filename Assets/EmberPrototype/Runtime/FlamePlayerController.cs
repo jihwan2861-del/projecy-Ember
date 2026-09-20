@@ -95,6 +95,7 @@ namespace EmberPrototype
         private Vector2 fireTravelProbeOffset;
         private Vector2 fireTravelWaypoint;
         private bool hasFireTravelWaypoint;
+        private readonly RaycastHit2D[] fireTravelCastHits = new RaycastHit2D[8];
 
         private void Awake()
         {
@@ -250,7 +251,16 @@ namespace EmberPrototype
                 destination = targetFire.AnchorPosition;
             }
 
-            body.MovePosition(Vector2.MoveTowards(body.position, destination, fireTravelSpeed * Time.fixedDeltaTime));
+            Vector2 displacement = destination - body.position;
+            float stepDistance = Mathf.Min(displacement.magnitude, fireTravelSpeed * Time.fixedDeltaTime);
+            if (stepDistance > 0.001f
+                && TryCastFireTravelStep(displacement / displacement.magnitude, stepDistance, out Vector2 surfaceNormal))
+            {
+                BounceFromFireTravel(surfaceNormal);
+                return;
+            }
+
+            body.MovePosition(Vector2.MoveTowards(body.position, destination, stepDistance));
             if (!hasFireTravelWaypoint && Vector2.SqrMagnitude(targetFire.AnchorPosition - body.position) <= 0.03f)
             {
                 EnterFire();
@@ -271,7 +281,17 @@ namespace EmberPrototype
             TryCornerCorrection(collision);
         }
 
-        private void OnCollisionStay2D(Collision2D collision) => TryCornerCorrection(collision);
+        private void OnCollisionStay2D(Collision2D collision)
+        {
+            if (state == FlameState.Travelling
+                && TryGetFireTravelBlockingNormal(collision, out Vector2 blockingNormal))
+            {
+                BounceFromFireTravel(blockingNormal);
+                return;
+            }
+
+            TryCornerCorrection(collision);
+        }
         private void OnTriggerEnter2D(Collider2D other) => HandleFlammableContact(other);
 
         private float SelectHorizontalAcceleration(float currentSpeed, float targetSpeed, bool grounded)
@@ -575,6 +595,33 @@ namespace EmberPrototype
             }
 
             return found;
+        }
+
+        private bool TryCastFireTravelStep(Vector2 direction, float distance, out Vector2 surfaceNormal)
+        {
+            surfaceNormal = Vector2.zero;
+            int obstacleMask = fireTravelObstacleMask.value == 0
+                ? Physics2D.AllLayers
+                : fireTravelObstacleMask.value;
+            ContactFilter2D filter = new ContactFilter2D();
+            filter.SetLayerMask(obstacleMask);
+            filter.useTriggers = false;
+
+            int hitCount = bodyCollider.Cast(direction, filter, fireTravelCastHits, distance + 0.03f);
+            float closestDistance = float.PositiveInfinity;
+
+            for (int i = 0; i < hitCount; i++)
+            {
+                RaycastHit2D hit = fireTravelCastHits[i];
+                if (hit.collider == null || hit.distance <= 0.001f) continue;
+                if (Vector2.Dot(direction, hit.normal) >= -0.2f) continue;
+                if (hit.distance >= closestDistance) continue;
+
+                closestDistance = hit.distance;
+                surfaceNormal = hit.normal;
+            }
+
+            return closestDistance < float.PositiveInfinity;
         }
 
         private void BounceFromFireTravel(Vector2 surfaceNormal)
