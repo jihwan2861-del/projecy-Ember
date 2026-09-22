@@ -41,6 +41,11 @@ namespace EmberPrototype
             deathHeight = fallHeight;
         }
 
+        public void SetSpawnPoint(Transform newSpawnPoint)
+        {
+            spawnPoint = newSpawnPoint;
+        }
+
         public void CompleteRoom()
         {
             Completed = true;

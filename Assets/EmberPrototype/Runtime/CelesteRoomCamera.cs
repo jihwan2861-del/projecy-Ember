@@ -18,10 +18,27 @@ namespace EmberPrototype
         [SerializeField, Range(0.0001f, 1f)] private float remainingDistanceAfterOneSecond = 0.01f;
         [SerializeField] private bool snapToTargetOnStart = true;
 
+        [Header("Screen Shake")]
+        [Tooltip("Dash shake duration in seconds.")]
+        [SerializeField, Min(0f)] private float dashShakeDuration = 0.12f;
+        [Tooltip("Dash shake amplitude in world units.")]
+        [SerializeField, Min(0f)] private float dashShakeMagnitude = 0.12f;
+        [Tooltip("Fire absorption shake duration in seconds.")]
+        [SerializeField, Min(0f)] private float absorbShakeDuration = 0.08f;
+        [Tooltip("Fire absorption shake amplitude in world units.")]
+        [SerializeField, Min(0f)] private float absorbShakeMagnitude = 0.08f;
+        [Tooltip("Shake when launching out of a burning tile with Z.")]
+        [SerializeField, Min(0f)] private float fireLaunchShakeDuration = 0.12f;
+        [SerializeField, Min(0f)] private float fireLaunchShakeMagnitude = 0.12f;
+
         private Camera viewCamera;
         private CameraRoom[] rooms;
         private CameraRoom currentRoom;
         private float cameraDepth;
+        private float shakeRemaining;
+        private float shakeDuration;
+        private float shakeMagnitude;
+        private float shakeSeed;
 
         public CameraRoom CurrentRoom => currentRoom;
 
@@ -57,6 +74,21 @@ namespace EmberPrototype
             Vector2 destination = CalculateTargetPosition();
             float blend = 1f - Mathf.Pow(remainingDistanceAfterOneSecond, Time.deltaTime);
             SetCameraPosition(Vector2.LerpUnclamped(from, destination, blend));
+            ApplyShake();
+        }
+
+        public void ShakeDash() => Shake(dashShakeDuration, dashShakeMagnitude);
+        public void ShakeAbsorb() => Shake(absorbShakeDuration, absorbShakeMagnitude);
+        public void ShakeFireLaunch() => Shake(fireLaunchShakeDuration, fireLaunchShakeMagnitude);
+
+        public void Shake(float duration, float magnitude)
+        {
+            if (duration <= 0f || magnitude <= 0f) return;
+            if (magnitude < shakeMagnitude && shakeRemaining > 0f) return;
+            shakeDuration = duration;
+            shakeRemaining = duration;
+            shakeMagnitude = magnitude;
+            shakeSeed = Random.value * 1000f;
         }
 
         public void SetTarget(Transform newTarget, bool snapImmediately = true)
@@ -137,9 +169,26 @@ namespace EmberPrototype
             transform.position = new Vector3(position.x, position.y, cameraDepth);
         }
 
+        private void ApplyShake()
+        {
+            if (shakeRemaining <= 0f) return;
+            shakeRemaining = Mathf.Max(0f, shakeRemaining - Time.deltaTime);
+            float progress = shakeDuration > 0f ? shakeRemaining / shakeDuration : 0f;
+            float x = Mathf.PerlinNoise(shakeSeed, Time.time * 48f) * 2f - 1f;
+            float y = Mathf.PerlinNoise(shakeSeed + 17.31f, Time.time * 48f) * 2f - 1f;
+            transform.position += new Vector3(x, y, 0f) * (shakeMagnitude * progress);
+            if (shakeRemaining <= 0f) shakeMagnitude = 0f;
+        }
+
         private void OnValidate()
         {
             remainingDistanceAfterOneSecond = Mathf.Clamp(remainingDistanceAfterOneSecond, 0.0001f, 1f);
+            dashShakeDuration = Mathf.Max(0f, dashShakeDuration);
+            dashShakeMagnitude = Mathf.Max(0f, dashShakeMagnitude);
+            absorbShakeDuration = Mathf.Max(0f, absorbShakeDuration);
+            absorbShakeMagnitude = Mathf.Max(0f, absorbShakeMagnitude);
+            fireLaunchShakeDuration = Mathf.Max(0f, fireLaunchShakeDuration);
+            fireLaunchShakeMagnitude = Mathf.Max(0f, fireLaunchShakeMagnitude);
         }
     }
 }

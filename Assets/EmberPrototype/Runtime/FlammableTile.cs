@@ -72,6 +72,7 @@ namespace EmberPrototype
             ApplyAppearance(true);
             ActivateFireEffect();
             onIgnited.Invoke();
+            FireStateChanged?.Invoke(this);
             spreadRoutine = StartCoroutine(SpreadAfterDelay());
             return true;
         }
@@ -89,6 +90,7 @@ namespace EmberPrototype
             ApplyAppearance(false);
             if (fireEffect != null) fireEffect.SetActive(false);
             onFireReset.Invoke();
+            FireStateChanged?.Invoke(this);
             if (startsBurning && isActiveAndEnabled) TryIgnite();
         }
 
