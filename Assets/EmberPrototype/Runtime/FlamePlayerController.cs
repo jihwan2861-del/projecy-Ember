@@ -38,6 +38,13 @@ namespace EmberPrototype
         [Header("Fire Absorb (X)")]
         [SerializeField, Range(-1f, 1f)] private float fireTargetDirectionDot = 0.35f;
 
+        [Header("Fire Absorb Target Line")]
+        [SerializeField] private bool showAbsorbTargetLine = true;
+        [SerializeField, Min(0.001f)] private float absorbTargetLineWidth = 0.045f;
+        [SerializeField] private Color absorbTargetLineColor = new Color(1f, 0.68f, 0.16f, 0.9f);
+        [SerializeField] private Material absorbTargetLineMaterial;
+        [SerializeField, Min(0)] private int absorbTargetLineSortingOrderOffset = 10;
+
         [Header("Ignition Burst (C)")]
         [SerializeField, Min(0.1f)] private float ignitionBurstRadius = 1.5f;
         [InspectorName("Ignition Burst Pause Time")]
@@ -69,6 +76,8 @@ namespace EmberPrototype
         private FlameState state;
         private FlammableTile targetFire;
         private FlammableTile absorbTargetPreview;
+        private LineRenderer absorbTargetLine;
+        private Material runtimeAbsorbTargetLineMaterial;
         private FlammableTile travelSourceFire;
         private float horizontalInput;
         private float coyoteRemaining;
@@ -124,6 +133,7 @@ namespace EmberPrototype
             if (flameFeedback == null) flameFeedback = gameObject.AddComponent<PlayerFlameFeedback>();
             afterimageEffect = GetComponent<PlayerAfterimageEffect>();
             if (afterimageEffect == null) afterimageEffect = gameObject.AddComponent<PlayerAfterimageEffect>();
+            CreateAbsorbTargetLine();
         }
 
         private void OnDisable()
@@ -417,7 +427,9 @@ namespace EmberPrototype
 
         private void LateUpdate()
         {
-            if (state != FlameState.Free) SetAbsorbTargetPreview(null);
+            if (state != FlameState.Free || (absorbTargetPreview != null && !absorbTargetPreview.IsBurning))
+                SetAbsorbTargetPreview(null);
+            UpdateAbsorbTargetLine();
         }
 
         private void TryAbsorb()
@@ -435,9 +447,76 @@ namespace EmberPrototype
         private void SetAbsorbTargetPreview(FlammableTile preview)
         {
             if (absorbTargetPreview == preview) return;
-            if (absorbTargetPreview != null) absorbTargetPreview.SetAbsorbTarget(false);
             absorbTargetPreview = preview;
-            if (absorbTargetPreview != null) absorbTargetPreview.SetAbsorbTarget(true);
+            if (absorbTargetLine != null) absorbTargetLine.enabled = preview != null;
+            UpdateAbsorbTargetLine();
+        }
+
+        private void CreateAbsorbTargetLine()
+        {
+            if (!showAbsorbTargetLine) return;
+
+            GameObject lineObject = new GameObject("Absorb Target Line");
+            lineObject.transform.SetParent(transform, false);
+            absorbTargetLine = lineObject.AddComponent<LineRenderer>();
+            absorbTargetLine.useWorldSpace = true;
+            absorbTargetLine.loop = false;
+            absorbTargetLine.positionCount = 2;
+            absorbTargetLine.widthMultiplier = absorbTargetLineWidth;
+            absorbTargetLine.numCapVertices = 4;
+            absorbTargetLine.startColor = absorbTargetLineColor;
+            absorbTargetLine.endColor = absorbTargetLineColor;
+            absorbTargetLine.sharedMaterial = absorbTargetLineMaterial != null
+                ? absorbTargetLineMaterial
+                : CreateAbsorbTargetLineMaterial();
+
+            SpriteRenderer playerVisual = GetComponentInChildren<SpriteRenderer>();
+            if (playerVisual != null)
+            {
+                absorbTargetLine.sortingLayerID = playerVisual.sortingLayerID;
+                absorbTargetLine.sortingOrder = playerVisual.sortingOrder + absorbTargetLineSortingOrderOffset;
+            }
+            else
+            {
+                absorbTargetLine.sortingOrder = absorbTargetLineSortingOrderOffset;
+            }
+
+            absorbTargetLine.enabled = false;
+        }
+
+        private Material CreateAbsorbTargetLineMaterial()
+        {
+            Shader shader = Shader.Find("Sprites/Default");
+            if (shader == null) shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
+            if (shader == null) return null;
+
+            runtimeAbsorbTargetLineMaterial = new Material(shader)
+            {
+                name = "Absorb Target Line (Runtime)"
+            };
+            return runtimeAbsorbTargetLineMaterial;
+        }
+
+        private void UpdateAbsorbTargetLine()
+        {
+            if (absorbTargetLine == null) return;
+            if (state != FlameState.Free || absorbTargetPreview == null || !absorbTargetPreview.IsBurning)
+            {
+                absorbTargetLine.enabled = false;
+                return;
+            }
+
+            float z = transform.position.z;
+            Vector2 start = body.position;
+            Vector2 end = absorbTargetPreview.AnchorPosition;
+            absorbTargetLine.SetPosition(0, new Vector3(start.x, start.y, z));
+            absorbTargetLine.SetPosition(1, new Vector3(end.x, end.y, z));
+            absorbTargetLine.enabled = true;
+        }
+
+        private void OnDestroy()
+        {
+            if (runtimeAbsorbTargetLineMaterial != null) Destroy(runtimeAbsorbTargetLineMaterial);
         }
 
         private FlammableTile FindBurningFire(Vector2 direction)
