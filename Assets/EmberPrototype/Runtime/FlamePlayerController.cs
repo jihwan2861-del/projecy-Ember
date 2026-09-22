@@ -44,6 +44,16 @@ namespace EmberPrototype
         [SerializeField] private Color absorbTargetLineColor = new Color(1f, 0.68f, 0.16f, 0.9f);
         [SerializeField] private Material absorbTargetLineMaterial;
         [SerializeField, Min(0)] private int absorbTargetLineSortingOrderOffset = 10;
+        [Tooltip("More segments make the animated flame guide curve smoother.")]
+        [SerializeField, Range(4, 24)] private int absorbTargetLineSegments = 14;
+        [Tooltip("Maximum sideways movement of the flame guide, in world units.")]
+        [SerializeField, Min(0f)] private float absorbTargetLineWobbleAmount = 0.035f;
+        [Tooltip("Speed of the smooth, irregular flame motion.")]
+        [SerializeField, Min(0.01f)] private float absorbTargetLineWobbleSpeed = 2.8f;
+        [Tooltip("Speed that the flame texture drifts along the guide.")]
+        [SerializeField, Min(0f)] private float absorbTargetLineTextureScrollSpeed = 0.6f;
+        [Tooltip("Width of the soft outer glow relative to the main line.")]
+        [SerializeField, Range(2f, 5f)] private float absorbTargetLineGlowWidthMultiplier = 3.5f;
 
         [Header("Ignition Burst (C)")]
         [SerializeField, Min(0.1f)] private float ignitionBurstRadius = 1.5f;
@@ -77,7 +87,11 @@ namespace EmberPrototype
         private FlammableTile targetFire;
         private FlammableTile absorbTargetPreview;
         private LineRenderer absorbTargetLine;
+        private LineRenderer absorbTargetLineGlow;
+        private LineRenderer absorbTargetLineCore;
         private Material runtimeAbsorbTargetLineMaterial;
+        private Texture2D runtimeAbsorbTargetLineTexture;
+        private Vector3[] absorbTargetLinePositions;
         private FlammableTile travelSourceFire;
         private float horizontalInput;
         private float coyoteRemaining;
@@ -448,7 +462,7 @@ namespace EmberPrototype
         {
             if (absorbTargetPreview == preview) return;
             absorbTargetPreview = preview;
-            if (absorbTargetLine != null) absorbTargetLine.enabled = preview != null;
+            SetAbsorbTargetLineEnabled(preview != null);
             UpdateAbsorbTargetLine();
         }
 
@@ -456,67 +470,180 @@ namespace EmberPrototype
         {
             if (!showAbsorbTargetLine) return;
 
-            GameObject lineObject = new GameObject("Absorb Target Line");
-            lineObject.transform.SetParent(transform, false);
-            absorbTargetLine = lineObject.AddComponent<LineRenderer>();
-            absorbTargetLine.useWorldSpace = true;
-            absorbTargetLine.loop = false;
-            absorbTargetLine.positionCount = 2;
-            absorbTargetLine.widthMultiplier = absorbTargetLineWidth;
-            absorbTargetLine.numCapVertices = 4;
-            absorbTargetLine.startColor = absorbTargetLineColor;
-            absorbTargetLine.endColor = absorbTargetLineColor;
-            absorbTargetLine.sharedMaterial = absorbTargetLineMaterial != null
-                ? absorbTargetLineMaterial
-                : CreateAbsorbTargetLineMaterial();
+            runtimeAbsorbTargetLineMaterial = CreateAbsorbTargetLineMaterial();
+            absorbTargetLineSegments = Mathf.Clamp(absorbTargetLineSegments, 4, 24);
+            absorbTargetLinePositions = new Vector3[absorbTargetLineSegments + 1];
 
             SpriteRenderer playerVisual = GetComponentInChildren<SpriteRenderer>();
+            int sortingLayerId = 0;
+            int baseSortingOrder = absorbTargetLineSortingOrderOffset;
             if (playerVisual != null)
             {
-                absorbTargetLine.sortingLayerID = playerVisual.sortingLayerID;
-                absorbTargetLine.sortingOrder = playerVisual.sortingOrder + absorbTargetLineSortingOrderOffset;
-            }
-            else
-            {
-                absorbTargetLine.sortingOrder = absorbTargetLineSortingOrderOffset;
+                sortingLayerId = playerVisual.sortingLayerID;
+                baseSortingOrder += playerVisual.sortingOrder;
             }
 
-            absorbTargetLine.enabled = false;
+            Color glowColor = absorbTargetLineColor;
+            glowColor.a *= 0.18f;
+            Color coreColor = Color.Lerp(absorbTargetLineColor, Color.white, 0.72f);
+
+            absorbTargetLineGlow = CreateAbsorbTargetLineRenderer(
+                "Absorb Target Line Glow", absorbTargetLineWidth * absorbTargetLineGlowWidthMultiplier,
+                glowColor, sortingLayerId, baseSortingOrder);
+            absorbTargetLine = CreateAbsorbTargetLineRenderer(
+                "Absorb Target Line", absorbTargetLineWidth,
+                absorbTargetLineColor, sortingLayerId, baseSortingOrder + 1);
+            absorbTargetLineCore = CreateAbsorbTargetLineRenderer(
+                "Absorb Target Line Core", absorbTargetLineWidth * 0.32f,
+                coreColor, sortingLayerId, baseSortingOrder + 2);
+            SetAbsorbTargetLineEnabled(false);
+        }
+
+        private LineRenderer CreateAbsorbTargetLineRenderer(
+            string objectName, float width, Color color, int sortingLayerId, int sortingOrder)
+        {
+            GameObject lineObject = new GameObject(objectName);
+            lineObject.transform.SetParent(transform, false);
+
+            LineRenderer line = lineObject.AddComponent<LineRenderer>();
+            line.useWorldSpace = true;
+            line.loop = false;
+            line.positionCount = absorbTargetLinePositions.Length;
+            line.widthMultiplier = width;
+            line.numCapVertices = 4;
+            line.startColor = color;
+            line.endColor = color;
+            line.textureMode = LineTextureMode.Tile;
+            line.textureScale = Vector2.one;
+            line.sharedMaterial = runtimeAbsorbTargetLineMaterial;
+            line.sortingLayerID = sortingLayerId;
+            line.sortingOrder = sortingOrder;
+            line.enabled = false;
+            return line;
         }
 
         private Material CreateAbsorbTargetLineMaterial()
         {
-            Shader shader = Shader.Find("Sprites/Default");
-            if (shader == null) shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
-            if (shader == null) return null;
-
-            runtimeAbsorbTargetLineMaterial = new Material(shader)
+            if (absorbTargetLineMaterial != null)
             {
-                name = "Absorb Target Line (Runtime)"
-            };
+                runtimeAbsorbTargetLineMaterial = new Material(absorbTargetLineMaterial)
+                {
+                    name = "Absorb Target Line (Runtime)"
+                };
+            }
+            else
+            {
+                Shader shader = Shader.Find("Sprites/Default");
+                if (shader == null) shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
+                if (shader == null) return null;
+
+                runtimeAbsorbTargetLineMaterial = new Material(shader)
+                {
+                    name = "Absorb Target Line (Runtime)"
+                };
+            }
+
+            if (runtimeAbsorbTargetLineMaterial.mainTexture == null)
+            {
+                runtimeAbsorbTargetLineTexture = CreateAbsorbTargetLineTexture();
+                runtimeAbsorbTargetLineMaterial.mainTexture = runtimeAbsorbTargetLineTexture;
+            }
+
             return runtimeAbsorbTargetLineMaterial;
+        }
+
+        private static Texture2D CreateAbsorbTargetLineTexture()
+        {
+            const int textureWidth = 64;
+            const int textureHeight = 16;
+            var texture = new Texture2D(textureWidth, textureHeight, TextureFormat.RGBA32, false)
+            {
+                name = "Absorb Target Flame Texture (Runtime)",
+                wrapMode = TextureWrapMode.Repeat,
+                filterMode = FilterMode.Bilinear
+            };
+
+            var pixels = new Color[textureWidth * textureHeight];
+            var random = new System.Random(9281);
+            for (int x = 0; x < textureWidth; x++)
+            {
+                float edgeJitter = (float)random.NextDouble() * 0.22f - 0.11f;
+                for (int y = 0; y < textureHeight; y++)
+                {
+                    float across = Mathf.Abs((y + 0.5f) / textureHeight * 2f - 1f);
+                    float noise = Mathf.PerlinNoise(x * 0.31f, y * 0.47f);
+                    float edge = 0.78f + edgeJitter + (noise - 0.5f) * 0.22f;
+                    float alpha = 1f - Mathf.SmoothStep(edge - 0.12f, edge + 0.08f, across);
+                    alpha *= Mathf.Lerp(0.58f, 1f, noise);
+                    if (random.NextDouble() < 0.035) alpha *= 0.25f;
+
+                    float core = 1f - Mathf.SmoothStep(0.08f, 0.76f, across);
+                    Color color = Color.Lerp(
+                        new Color(1f, 0.22f, 0.025f),
+                        new Color(1f, 0.96f, 0.54f),
+                        core);
+                    pixels[y * textureWidth + x] = new Color(color.r, color.g, color.b, alpha);
+                }
+            }
+
+            texture.SetPixels(pixels);
+            texture.Apply(false, true);
+            return texture;
         }
 
         private void UpdateAbsorbTargetLine()
         {
+            if (runtimeAbsorbTargetLineMaterial != null
+                && runtimeAbsorbTargetLineMaterial.HasProperty("_MainTex"))
+            {
+                runtimeAbsorbTargetLineMaterial.mainTextureOffset =
+                    Vector2.left * (Time.time * absorbTargetLineTextureScrollSpeed);
+            }
+
             if (absorbTargetLine == null) return;
             if (state != FlameState.Free || absorbTargetPreview == null || !absorbTargetPreview.IsBurning)
             {
-                absorbTargetLine.enabled = false;
+                SetAbsorbTargetLineEnabled(false);
                 return;
             }
 
-            float z = transform.position.z;
             Vector2 start = body.position;
             Vector2 end = absorbTargetPreview.AnchorPosition;
-            absorbTargetLine.SetPosition(0, new Vector3(start.x, start.y, z));
-            absorbTargetLine.SetPosition(1, new Vector3(end.x, end.y, z));
-            absorbTargetLine.enabled = true;
+            Vector2 direction = end - start;
+            Vector2 perpendicular = direction.sqrMagnitude > 0.0001f
+                ? new Vector2(-direction.y, direction.x).normalized
+                : Vector2.up;
+            float time = Time.time * absorbTargetLineWobbleSpeed;
+            for (int i = 0; i < absorbTargetLinePositions.Length; i++)
+            {
+                float t = i / (float)(absorbTargetLinePositions.Length - 1);
+                Vector2 point = Vector2.Lerp(start, end, t);
+                float envelope = Mathf.Sin(t * Mathf.PI);
+                float broadNoise = Mathf.PerlinNoise(12.7f + i * 0.39f, time) * 2f - 1f;
+                float fineNoise = Mathf.PerlinNoise(41.3f + i * 0.93f, time * 1.7f) * 2f - 1f;
+                float offset = (broadNoise * 0.72f + fineNoise * 0.28f)
+                    * absorbTargetLineWobbleAmount * envelope;
+                point += perpendicular * offset;
+                absorbTargetLinePositions[i] = new Vector3(point.x, point.y, transform.position.z);
+            }
+
+            absorbTargetLine.SetPositions(absorbTargetLinePositions);
+            absorbTargetLineGlow.SetPositions(absorbTargetLinePositions);
+            absorbTargetLineCore.SetPositions(absorbTargetLinePositions);
+            SetAbsorbTargetLineEnabled(true);
+        }
+
+        private void SetAbsorbTargetLineEnabled(bool enabled)
+        {
+            if (absorbTargetLine != null) absorbTargetLine.enabled = enabled;
+            if (absorbTargetLineGlow != null) absorbTargetLineGlow.enabled = enabled;
+            if (absorbTargetLineCore != null) absorbTargetLineCore.enabled = enabled;
         }
 
         private void OnDestroy()
         {
             if (runtimeAbsorbTargetLineMaterial != null) Destroy(runtimeAbsorbTargetLineMaterial);
+            if (runtimeAbsorbTargetLineTexture != null) Destroy(runtimeAbsorbTargetLineTexture);
         }
 
         private FlammableTile FindBurningFire(Vector2 direction)
