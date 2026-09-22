@@ -68,6 +68,7 @@ namespace EmberPrototype
         private Collider2D bodyCollider;
         private FlameState state;
         private FlammableTile targetFire;
+        private FlammableTile absorbTargetPreview;
         private FlammableTile travelSourceFire;
         private float horizontalInput;
         private float coyoteRemaining;
@@ -96,6 +97,8 @@ namespace EmberPrototype
         private Vector2 fireTravelWaypoint;
         private bool hasFireTravelWaypoint;
         private readonly RaycastHit2D[] fireTravelCastHits = new RaycastHit2D[8];
+        private readonly RaycastHit2D[] wallClearanceCastHits = new RaycastHit2D[8];
+        private Collider2D[] fireTargetHits = new Collider2D[32];
 
         private void Awake()
         {
@@ -153,6 +156,7 @@ namespace EmberPrototype
             horizontalInput = heldDirection.x;
             jumpHeld = Keyboard.current.zKey.isPressed;
             if (horizontalInput != 0f) facingDirection = horizontalInput > 0f ? 1 : -1;
+            UpdateAbsorbTargetPreview(heldDirection);
 
             if (Keyboard.current.zKey.wasPressedThisFrame)
             {
@@ -160,7 +164,7 @@ namespace EmberPrototype
                 jumpReleased = false;
             }
             if (Keyboard.current.zKey.wasReleasedThisFrame) jumpReleased = true;
-            if (Keyboard.current.xKey.wasPressedThisFrame) TryAbsorb(heldDirection);
+            if (Keyboard.current.xKey.wasPressedThisFrame) TryAbsorb();
             if (Keyboard.current.cKey.wasPressedThisFrame) TryIgnitionBurst();
         }
 
@@ -411,20 +415,45 @@ namespace EmberPrototype
             return direction == Vector2.zero ? Vector2.zero : direction.normalized;
         }
 
-        private void TryAbsorb(Vector2 inputDirection)
+        private void LateUpdate()
+        {
+            if (state != FlameState.Free) SetAbsorbTargetPreview(null);
+        }
+
+        private void TryAbsorb()
+        {
+            if (absorbTargetPreview != null && absorbTargetPreview.IsBurning)
+                BeginFireTravel(absorbTargetPreview);
+        }
+
+        private void UpdateAbsorbTargetPreview(Vector2 inputDirection)
         {
             Vector2 direction = inputDirection == Vector2.zero ? Vector2.right * facingDirection : inputDirection;
-            FlammableTile selected = FindBurningFire(direction);
-            if (selected != null) BeginFireTravel(selected);
+            SetAbsorbTargetPreview(FindBurningFire(direction));
+        }
+
+        private void SetAbsorbTargetPreview(FlammableTile preview)
+        {
+            if (absorbTargetPreview == preview) return;
+            if (absorbTargetPreview != null) absorbTargetPreview.SetAbsorbTarget(false);
+            absorbTargetPreview = preview;
+            if (absorbTargetPreview != null) absorbTargetPreview.SetAbsorbTarget(true);
         }
 
         private FlammableTile FindBurningFire(Vector2 direction)
         {
-            Collider2D[] hits = Physics2D.OverlapCircleAll(body.position, fireTravelRange);
+            int hitCount = Physics2D.OverlapCircleNonAlloc(body.position, fireTravelRange, fireTargetHits);
+            if (hitCount == fireTargetHits.Length)
+            {
+                System.Array.Resize(ref fireTargetHits, fireTargetHits.Length * 2);
+                hitCount = Physics2D.OverlapCircleNonAlloc(body.position, fireTravelRange, fireTargetHits);
+            }
             FlammableTile selected = null;
             float bestScore = float.NegativeInfinity;
-            foreach (Collider2D hit in hits)
+            for (int i = 0; i < hitCount; i++)
             {
+                Collider2D hit = fireTargetHits[i];
+                if (hit == null) continue;
                 if (!hit.TryGetComponent(out FlammableTile tile) || !tile.IsBurning) continue;
                 Vector2 offset = tile.AnchorPosition - body.position;
                 float distance = offset.magnitude;
